@@ -187,8 +187,9 @@ impl CppRefactorer {
         if kind == "function_definition" || kind == "expression_statement" {
             let text = &self.source[node.byte_range()];
             if text.contains("LLVM_LIBC_FUNCTION") && text.contains(func_name) {
-                let re = Regex::new(r"LLVM_LIBC_FUNCTION\s*\(\s*[^,]+,\s*[^,]+,\s*\(([^)]*)\)\s*\)")
-                    .unwrap();
+                let re =
+                    Regex::new(r"LLVM_LIBC_FUNCTION\s*\(\s*[^,]+,\s*[^,]+,\s*\(([^)]*)\)\s*\)")
+                        .unwrap();
 
                 if let Some(caps) = re.captures(text) {
                     let args_block = caps[1].trim();
@@ -203,7 +204,8 @@ impl CppRefactorer {
                     if let Some(body_match) = text.find('{') {
                         let body_start = node.start_byte() + body_match;
                         let body_end = node.end_byte();
-                        let new_body = format!("{{\n  return math::{}({});\n}}", func_name, call_args);
+                        let new_body =
+                            format!("{{\n  return math::{}({});\n}}", func_name, call_args);
 
                         self.edits.push(Edit {
                             range: body_start..body_end,
@@ -366,11 +368,7 @@ fn extract_original_deps(cmake_path: &Path, func: &str) -> Result<Vec<String>> {
     Ok(deps)
 }
 
-fn update_support_cmake(
-    cmake_path: &Path,
-    func: &str,
-    extra_deps: Vec<String>,
-) -> Result<()> {
+fn update_support_cmake(cmake_path: &Path, func: &str, extra_deps: Vec<String>) -> Result<()> {
     let mut content = fs::read_to_string(cmake_path)?;
 
     if content.contains(&format!("add_header_library(\n  {}", func)) {
@@ -462,22 +460,24 @@ fn update_test_cmake(cmake_path: &Path, func: &str) -> Result<()> {
 fn update_bazel_files(root: &Path, func: &str) -> Result<()> {
     println!("Updating Bazel BUILD file...");
     let bazel_path = root.join("utils/bazel/llvm-project-overlay/libc/BUILD.bazel");
-    let header_path = root.join(format!("libc/src/__support/math/{}.h", func));
+    let support_cmake_path = root.join("libc/src/__support/math/CMakeLists.txt");
 
     if !bazel_path.exists() {
         println!("  Warning: Bazel file not found");
         return Ok(());
     }
 
-    if header_path.exists() {
-        update_bazel_support_target(&bazel_path, &header_path, func)?;
+    if support_cmake_path.exists() {
+        update_bazel_support_target(&bazel_path, &support_cmake_path, func)?;
+    } else {
+        println!("  Warning: Support CMake not found, cannot extract deps for Bazel.");
     }
 
     update_bazel_math_function_target(&bazel_path, func)?;
     Ok(())
 }
 
-fn update_bazel_support_target(bazel_path: &Path, header_path: &Path, func: &str) -> Result<()> {
+fn update_bazel_support_target(bazel_path: &Path, cmake_path: &Path, func: &str) -> Result<()> {
     let mut content = fs::read_to_string(bazel_path)?;
     let target_name = format!("__support_math_{}", func);
 
@@ -486,7 +486,7 @@ fn update_bazel_support_target(bazel_path: &Path, header_path: &Path, func: &str
         return Ok(());
     }
 
-    let deps = get_bazel_deps_from_header(header_path)?;
+    let deps = get_bazel_deps_from_cmake(cmake_path, func)?;
     let deps_str = deps
         .iter()
         .map(|d| format!("\"{}\",", d))
@@ -536,25 +536,38 @@ fn update_bazel_math_function_target(bazel_path: &Path, func: &str) -> Result<()
     Ok(())
 }
 
-fn get_bazel_deps_from_header(header_path: &Path) -> Result<Vec<String>> {
-    let content = fs::read_to_string(header_path)?;
+fn get_bazel_deps_from_cmake(cmake_path: &Path, func: &str) -> Result<Vec<String>> {
+    let content = fs::read_to_string(cmake_path)?;
     let mut deps = Vec::new();
 
-    for line in content.lines() {
-        if line.starts_with("#include") {
-            if line.contains("src/__support/FPUtil/") {
-                if let Some(filename) = line.split('/').last() {
-                    let name = filename.replace(".h\"", "").replace(".h>", "");
-                    deps.push(format!(":__support_fputil_{}", name.to_lowercase()));
-                }
-            } else if line.contains("src/__support/CPP/") {
-                if let Some(filename) = line.split('/').last() {
-                    let name = filename.replace(".h\"", "").replace(".h>", "");
-                    deps.push(format!(":__support_cpp_{}", name.to_lowercase()));
+    let pattern = format!(
+        r"add_header_library\s*\(\s*{}\s*[\s\S]*?DEPENDS\s*([\s\S]*?)\)",
+        regex::escape(func)
+    );
+    let re = RegexBuilder::new(&pattern).build().unwrap();
+
+    if let Some(caps) = re.captures(&content) {
+        let depends_block = &caps[1];
+        for token in depends_block.split_whitespace() {
+            let dep = token.trim();
+            if dep.is_empty() || dep == ")" {
+                continue;
+            }
+
+            if dep == "libc.src.errno.errno" {
+                deps.push(":errno".to_string());
+            } else if dep.starts_with("libc.src.__support.") {
+                let parts: Vec<&str> = dep.split('.').collect();
+                // Expected format: libc.src.__support.Group.Name
+                if parts.len() >= 5 {
+                    let group = parts[3].to_lowercase();
+                    let name = parts[4].to_lowercase();
+                    deps.push(format!(":__support_{}_{}", group, name));
                 }
             }
         }
     }
+
     deps.sort();
     deps.dedup();
     Ok(deps)
