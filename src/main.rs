@@ -273,8 +273,12 @@ fn extract_and_create_support_header(
             ("", "", "")
         };
 
+        let title = format!("Implementation header for {}", func_name);
+        let dashes_count = (80usize.saturating_sub(8 + title.len() + 16)).max(0);
+        let first_line = format!("//===-- {}{} -*- C++ -*-===//", title, "-".repeat(dashes_count));
+
         let header_content = format!(
-            r#"//===-- Implementation header for {func} ------------------------*- C++ -*-===//
+            r#"{first_line}
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -299,6 +303,7 @@ LIBC_INLINE static constexpr {ret} {func}({args}) {body}
 {post_guard}
 #endif // LLVM_LIBC_SRC___SUPPORT_MATH_{func_upper}_H
 "#,
+            first_line = first_line,
             func = func_name,
             func_upper = func_name.to_uppercase(),
             ret = ret_type,
@@ -684,8 +689,12 @@ fn generate_shared_wrapper(func: &str, use_f16: bool, use_f128: bool) -> String 
         ("", "", "")
     };
 
+    let title = format!("Shared {} function", func);
+    let dashes_count = (80usize.saturating_sub(8 + title.len() + 16)).max(0);
+    let first_line = format!("//===-- {}{} -*- C++ -*-===//", title, "-".repeat(dashes_count));
+
     format!(
-        r#"//===-- Shared {func} function ----------------------------------*- C++ -*-===//
+        r#"{first_line}
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -710,6 +719,7 @@ using math::{func};
 {post_guard}
 #endif // LLVM_LIBC_SHARED_MATH_{func_upper}_H
 "#,
+        first_line = first_line,
         func = func,
         func_upper = func_upper,
         include_macro = include_macro,
