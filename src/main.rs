@@ -228,6 +228,7 @@ fn extract_and_create_support_header(
     cpp_path: &Path,
     header_path: &Path,
     use_f16: bool,
+    use_f128: bool,
 ) -> Result<()> {
     let cpp_content = fs::read_to_string(cpp_path).context("Could not read generic CPP file")?;
     let mut extra_includes = String::new();
@@ -237,7 +238,7 @@ fn extract_and_create_support_header(
             if line.contains(&format!("src/math/{}.h", func_name)) {
                 continue;
             }
-            if line.contains("float16-macros.h") {
+            if line.contains("float16-macros.h") || line.contains("float128-macros.h") {
                 continue;
             }
             extra_includes.push_str(line);
@@ -256,7 +257,13 @@ fn extract_and_create_support_header(
         let args = caps[2].trim();
         let body = caps[3].trim();
 
-        let (macro_include, pre_guard, post_guard) = if use_f16 {
+        let (macro_include, pre_guard, post_guard) = if use_f128 {
+            (
+                "#include \"include/llvm-libc-macros/float128-macros.h\"\n",
+                "\n#ifdef LIBC_TYPES_HAS_FLOAT128\n",
+                "\n#endif // LIBC_TYPES_HAS_FLOAT128\n",
+            )
+        } else if use_f16 {
             (
                 "#include \"include/llvm-libc-macros/float16-macros.h\"\n",
                 "\n#ifdef LIBC_TYPES_HAS_FLOAT16\n",
@@ -558,7 +565,6 @@ fn get_bazel_deps_from_cmake(cmake_path: &Path, func: &str) -> Result<Vec<String
                 deps.push(":errno".to_string());
             } else if dep.starts_with("libc.src.__support.") {
                 let parts: Vec<&str> = dep.split('.').collect();
-                // Expected format: libc.src.__support.Group.Name
                 if parts.len() >= 5 {
                     let group = parts[3].to_lowercase();
                     let name = parts[4].to_lowercase();
@@ -578,20 +584,21 @@ fn main() -> Result<()> {
     let func = &args.func;
     let root = &args.root;
 
-    // Auto-detect float16 usage
     let generic_cpp_path = root.join(format!("libc/src/math/generic/{}.cpp", func));
-    let use_f16 = if generic_cpp_path.exists() {
-        let content = fs::read_to_string(&generic_cpp_path).unwrap_or_default();
-        content.contains("float16")
-    } else {
-        false
-    };
+    let mut use_f16 = false;
+    let mut use_f128 = false;
 
-    println!("Refactoring function: {} (Float16: {})", func, use_f16);
+    if generic_cpp_path.exists() {
+        let content = fs::read_to_string(&generic_cpp_path).unwrap_or_default();
+        use_f16 = content.contains("float16") || content.contains("f16");
+        use_f128 = content.contains("float128") || content.contains("f128");
+    }
+
+    println!("Refactoring function: {} (f16: {}, f128: {})", func, use_f16, use_f128);
 
     let shared_math_func_path = root.join(format!("libc/shared/math/{}.h", func));
     if !shared_math_func_path.exists() {
-        let content = generate_shared_wrapper(func, use_f16);
+        let content = generate_shared_wrapper(func, use_f16, use_f128);
         fs::write(&shared_math_func_path, content)?;
         println!("Created: {:?}", shared_math_func_path);
     }
@@ -599,11 +606,17 @@ fn main() -> Result<()> {
     let shared_math_path = root.join("libc/shared/math.h");
     if shared_math_path.exists() {
         let content = fs::read_to_string(&shared_math_path)?;
-        let include_line = if use_f16 {
-            format!(
-                "#ifdef LIBC_TYPES_HAS_FLOAT16\n#include \"math/{}.h\"\n#endif // LIBC_TYPES_HAS_FLOAT16",
-                func
-            )
+        
+        let (pre, post) = if use_f128 {
+            ("\n#ifdef LIBC_TYPES_HAS_FLOAT128\n", "\n#endif // LIBC_TYPES_HAS_FLOAT128\n")
+        } else if use_f16 {
+            ("\n#ifdef LIBC_TYPES_HAS_FLOAT16\n", "\n#endif // LIBC_TYPES_HAS_FLOAT16\n")
+        } else {
+            ("", "")
+        };
+
+        let include_line = if use_f128 || use_f16 {
+            format!("{}#include \"math/{}.h\"{}", pre.trim(), func, post.trim())
         } else {
             format!("#include \"math/{}.h\"", func)
         };
@@ -627,7 +640,7 @@ fn main() -> Result<()> {
 
     if !support_path.exists() {
         if generic_cpp_path.exists() {
-            extract_and_create_support_header(func, &generic_cpp_path, &support_path, use_f16)?;
+            extract_and_create_support_header(func, &generic_cpp_path, &support_path, use_f16, use_f128)?;
         } else {
             println!("Warning: Support file missing and generic CPP missing.");
         }
@@ -652,9 +665,16 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn generate_shared_wrapper(func: &str, use_f16: bool) -> String {
+fn generate_shared_wrapper(func: &str, use_f16: bool, use_f128: bool) -> String {
     let func_upper = func.to_uppercase();
-    let (include_macro, pre_guard, post_guard) = if use_f16 {
+    
+    let (include_macro, pre_guard, post_guard) = if use_f128 {
+        (
+            "\n#include \"include/llvm-libc-macros/float128-macros.h\"",
+            "\n#ifdef LIBC_TYPES_HAS_FLOAT128\n",
+            "\n#endif // LIBC_TYPES_HAS_FLOAT128\n",
+        )
+    } else if use_f16 {
         (
             "\n#include \"include/llvm-libc-macros/float16-macros.h\"",
             "\n#ifdef LIBC_TYPES_HAS_FLOAT16\n",
