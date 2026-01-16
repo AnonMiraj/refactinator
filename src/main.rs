@@ -274,8 +274,12 @@ fn extract_and_create_support_header(
         };
 
         let title = format!("Implementation header for {}", func_name);
-        let dashes_count = (80usize.saturating_sub(8 + title.len() + 16)).max(0);
-        let first_line = format!("//===-- {}{} -*- C++ -*-===//", title, "-".repeat(dashes_count));
+        let dashes_count = (80usize.saturating_sub(8 + title.len() + 17)).max(0);
+        let first_line = format!(
+            "//===-- {} {}-*- C++ -*-===//",
+            title,
+            "-".repeat(dashes_count)
+        );
 
         let header_content = format!(
             r#"{first_line}
@@ -291,6 +295,7 @@ fn extract_and_create_support_header(
 
 {macro_include}{pre_guard}
 {extra_includes}
+
 namespace LIBC_NAMESPACE_DECL {{
 
 namespace math {{
@@ -584,6 +589,86 @@ fn get_bazel_deps_from_cmake(cmake_path: &Path, func: &str) -> Result<Vec<String
     Ok(deps)
 }
 
+fn update_shared_test_file(root: &Path, func: &str, args_str: &str) -> Result<()> {
+    let test_path = root.join("libc/test/shared/shared_math_test.cpp");
+    if !test_path.exists() {
+        println!(
+            "Warning: Shared math test file not found at {:?}",
+            test_path
+        );
+        return Ok(());
+    }
+
+    let mut content = fs::read_to_string(&test_path)?;
+    if content.contains(&format!("shared::{}", func)) {
+        println!("  Skipping shared test (already exists)");
+        return Ok(());
+    }
+
+    // 1. Map function suffix to TEST block
+    let (block_name, zero_lit, input_lit) = if func.ends_with("f16") {
+        ("AllFloat16", "0x0p+0f16", "0.0f16")
+    } else if func.ends_with("f128") {
+        ("AllFloat128", "float128(0.0)", "float128(0.0)")
+    } else if func.ends_with("f") {
+        ("AllFloat", "0x0p+0f", "0.0f")
+    } else if func.ends_with("l") {
+        ("AllLongDouble", "0x0p+0L", "0.0L")
+    } else {
+        ("AllDouble", "0.0", "0.0")
+    };
+
+    // 2. Determine argument count from the passed string
+    let mut arg_count = 1;
+    if !args_str.trim().is_empty() {
+        arg_count = args_str.split(',').count();
+    }
+
+    let inputs = vec![input_lit; arg_count].join(", ");
+    let test_line = format!(
+        "  EXPECT_FP_EQ({}, LIBC_NAMESPACE::shared::{}({}));",
+        zero_lit, func, inputs
+    );
+
+    // 3. Inject into the correct TEST block
+    let pattern = format!(
+        r"(?s)TEST\(LlvmLibcSharedMathTest, {}\) \{{(.*?)\}}",
+        block_name
+    );
+    let re = RegexBuilder::new(&pattern)
+        .multi_line(true)
+        .build()
+        .unwrap();
+
+    if let Some(caps) = re.captures(&content) {
+        let full_match = caps.get(0).unwrap();
+        let body = &caps[1];
+
+        let mut new_body = body.to_string();
+        if !new_body.trim_end().ends_with('\n') {
+            new_body.push('\n');
+        }
+        new_body.push_str(&test_line);
+        new_body.push('\n');
+
+        let replacement = format!(
+            "TEST(LlvmLibcSharedMathTest, {}) {{{}}}",
+            block_name, new_body
+        );
+        content.replace_range(full_match.range(), &replacement);
+
+        fs::write(&test_path, content)?;
+        println!("  Updated shared test: {:?}", test_path);
+    } else {
+        println!(
+            "  Warning: Could not find TEST block {} in shared_math_test.cpp",
+            block_name
+        );
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let func = &args.func;
@@ -592,14 +677,28 @@ fn main() -> Result<()> {
     let generic_cpp_path = root.join(format!("libc/src/math/generic/{}.cpp", func));
     let mut use_f16 = false;
     let mut use_f128 = false;
+    let mut extracted_args = String::new();
 
     if generic_cpp_path.exists() {
         let content = fs::read_to_string(&generic_cpp_path).unwrap_or_default();
         use_f16 = content.contains("float16") || content.contains("f16");
         use_f128 = content.contains("float128") || content.contains("f128");
+
+        // Extract args once here to use in multiple places
+        let re = Regex::new(&format!(
+            r"LLVM_LIBC_FUNCTION\s*\(\s*[^,]+,\s*{},\s*\(([^)]*)\)\s*\)",
+            regex::escape(func)
+        ))
+        .unwrap();
+        if let Some(caps) = re.captures(&content) {
+            extracted_args = caps[1].trim().to_string();
+        }
     }
 
-    println!("Refactoring function: {} (f16: {}, f128: {})", func, use_f16, use_f128);
+    println!(
+        "Refactoring function: {} (f16: {}, f128: {})",
+        func, use_f16, use_f128
+    );
 
     let shared_math_func_path = root.join(format!("libc/shared/math/{}.h", func));
     if !shared_math_func_path.exists() {
@@ -611,20 +710,8 @@ fn main() -> Result<()> {
     let shared_math_path = root.join("libc/shared/math.h");
     if shared_math_path.exists() {
         let content = fs::read_to_string(&shared_math_path)?;
-        
-        let (pre, post) = if use_f128 {
-            ("\n#ifdef LIBC_TYPES_HAS_FLOAT128\n", "\n#endif // LIBC_TYPES_HAS_FLOAT128\n")
-        } else if use_f16 {
-            ("\n#ifdef LIBC_TYPES_HAS_FLOAT16\n", "\n#endif // LIBC_TYPES_HAS_FLOAT16\n")
-        } else {
-            ("", "")
-        };
 
-        let include_line = if use_f128 || use_f16 {
-            format!("{}#include \"math/{}.h\"{}", pre.trim(), func, post.trim())
-        } else {
-            format!("#include \"math/{}.h\"", func)
-        };
+        let include_line = format!("#include \"math/{}.h\"", func);
 
         if !content.contains(&format!("math/{}.h", func)) {
             let mut refactor = CppRefactorer::new(content.clone())?;
@@ -645,7 +732,13 @@ fn main() -> Result<()> {
 
     if !support_path.exists() {
         if generic_cpp_path.exists() {
-            extract_and_create_support_header(func, &generic_cpp_path, &support_path, use_f16, use_f128)?;
+            extract_and_create_support_header(
+                func,
+                &generic_cpp_path,
+                &support_path,
+                use_f16,
+                use_f128,
+            )?;
         } else {
             println!("Warning: Support file missing and generic CPP missing.");
         }
@@ -667,15 +760,16 @@ fn main() -> Result<()> {
 
     update_cmake_files(root, func)?;
     update_bazel_files(root, func)?;
+    update_shared_test_file(root, func, &extracted_args)?;
     Ok(())
 }
 
 fn generate_shared_wrapper(func: &str, use_f16: bool, use_f128: bool) -> String {
     let func_upper = func.to_uppercase();
-    
+
     let (include_macro, pre_guard, post_guard) = if use_f128 {
         (
-            "\n#include \"include/llvm-libc-macros/float128-macros.h\"",
+            "\n#include \"include/llvm-libc-types/float128.h\"",
             "\n#ifdef LIBC_TYPES_HAS_FLOAT128\n",
             "\n#endif // LIBC_TYPES_HAS_FLOAT128\n",
         )
@@ -690,8 +784,12 @@ fn generate_shared_wrapper(func: &str, use_f16: bool, use_f128: bool) -> String 
     };
 
     let title = format!("Shared {} function", func);
-    let dashes_count = (80usize.saturating_sub(8 + title.len() + 16)).max(0);
-    let first_line = format!("//===-- {}{} -*- C++ -*-===//", title, "-".repeat(dashes_count));
+    let dashes_count = (80usize.saturating_sub(8 + title.len() + 17)).max(0);
+    let first_line = format!(
+        "//===-- {} {}-*- C++ -*-===//",
+        title,
+        "-".repeat(dashes_count)
+    );
 
     format!(
         r#"{first_line}
