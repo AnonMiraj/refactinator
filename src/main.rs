@@ -802,9 +802,7 @@ fn generate_shared_wrapper(func: &str, use_f16: bool, use_f128: bool) -> String 
 
 #ifndef LLVM_LIBC_SHARED_MATH_{func_upper}_H
 #define LLVM_LIBC_SHARED_MATH_{func_upper}_H
-{include_macro}
-#include "shared/libc_common.h"
-{pre_guard}
+{include_macro}#include "shared/libc_common.h"{pre_guard}
 #include "src/__support/math/{func}.h"
 
 namespace LIBC_NAMESPACE_DECL {{
