@@ -281,6 +281,9 @@ fn get_bazel_deps_from_cmake(
         deps.push(":llvm_libc_types_float128".to_string());
     }
 
+    deps.push(":__support_macros_config".to_string());
+    deps.retain(|d| !d.contains("common"));
+    deps.retain(|d| !d.contains("properties"));
     deps.sort();
     deps.dedup();
     Ok(deps)

@@ -194,6 +194,10 @@ pub fn extract_and_create_support_header(
             {
                 continue;
             }
+            // remove common.h
+            if line.contains("src/__support/common.h") {
+                continue;
+            }
         }
         lines.push(line);
     }

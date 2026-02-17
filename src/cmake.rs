@@ -89,6 +89,9 @@ fn update_support_cmake(
         deps.push("libc.include.llvm-libc-types.float128".to_string());
     }
 
+    deps.push("libc.src.__support.macros.config".to_string());
+    deps.retain(|d| !d.contains("common"));
+    deps.retain(|d| !d.contains("properties"));
     deps.sort();
     deps.dedup();
 
