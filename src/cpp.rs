@@ -160,21 +160,28 @@ pub fn extract_and_create_support_header(
     let func_upper = func_name.to_uppercase();
     let guard_name = format!("LLVM_LIBC_SRC___SUPPORT_MATH_{}_H", func_upper);
 
-    let (macro_include, pre_guard, post_guard) = if use_f128 {
-        (
-            "#include \"include/llvm-libc-types/float128.h\"\n",
-            "\n#ifdef LIBC_TYPES_HAS_FLOAT128\n",
-            "\n#endif // LIBC_TYPES_HAS_FLOAT128\n",
-        )
-    } else if use_f16 {
-        (
-            "#include \"include/llvm-libc-macros/float16-macros.h\"\n",
-            "\n#ifdef LIBC_TYPES_HAS_FLOAT16\n",
-            "\n#endif // LIBC_TYPES_HAS_FLOAT16\n",
-        )
-    } else {
-        ("", "", "")
-    };
+    let mut macro_include = String::new();
+    let mut pre_guard = String::new();
+    let mut post_guard = String::new();
+
+    if use_f16 {
+        macro_include.push_str("#include \"include/llvm-libc-macros/float16-macros.h\"\n");
+        pre_guard.push_str("\n#ifdef LIBC_TYPES_HAS_FLOAT16");
+        post_guard.insert_str(0, "\n#endif // LIBC_TYPES_HAS_FLOAT16");
+    }
+
+    if use_f128 {
+        macro_include.push_str("#include \"include/llvm-libc-types/float128.h\"\n");
+        pre_guard.push_str("\n#ifdef LIBC_TYPES_HAS_FLOAT128");
+        post_guard.insert_str(0, "\n#endif // LIBC_TYPES_HAS_FLOAT128");
+    }
+
+    if !pre_guard.is_empty() {
+        pre_guard.push('\n');
+    }
+    if !post_guard.is_empty() {
+        post_guard.push('\n');
+    }
 
     let mut lines = Vec::new();
     for line in transformed.lines() {
@@ -332,21 +339,28 @@ LLVM_LIBC_FUNCTION({ret}, {func}, ({args})) {{
 pub fn generate_shared_wrapper(func: &str, use_f16: bool, use_f128: bool) -> String {
     let func_upper = func.to_uppercase();
 
-    let (include_macro, pre_guard, post_guard) = if use_f128 {
-        (
-            "\n#include \"include/llvm-libc-types/float128.h\"\n",
-            "\n#ifdef LIBC_TYPES_HAS_FLOAT128\n",
-            "\n#endif // LIBC_TYPES_HAS_FLOAT128\n",
-        )
-    } else if use_f16 {
-        (
-            "\n#include \"include/llvm-libc-macros/float16-macros.h\"\n",
-            "\n#ifdef LIBC_TYPES_HAS_FLOAT16\n",
-            "\n#endif // LIBC_TYPES_HAS_FLOAT16\n",
-        )
-    } else {
-        ("", "", "")
-    };
+    let mut include_macro = String::new();
+    let mut pre_guard = String::new();
+    let mut post_guard = String::new();
+
+    if use_f16 {
+        include_macro.push_str("#include \"include/llvm-libc-macros/float16-macros.h\"\n");
+        pre_guard.push_str("\n#ifdef LIBC_TYPES_HAS_FLOAT16");
+        post_guard.insert_str(0, "\n#endif // LIBC_TYPES_HAS_FLOAT16");
+    }
+
+    if use_f128 {
+        include_macro.push_str("#include \"include/llvm-libc-types/float128.h\"\n");
+        pre_guard.push_str("\n#ifdef LIBC_TYPES_HAS_FLOAT128");
+        post_guard.insert_str(0, "\n#endif // LIBC_TYPES_HAS_FLOAT128");
+    }
+
+    if !pre_guard.is_empty() {
+        pre_guard.push('\n');
+    }
+    if !post_guard.is_empty() {
+        post_guard.push('\n');
+    }
 
     let title = format!("Shared {} function", func);
     let dashes_count = (80usize.saturating_sub(8 + title.len() + 17)).max(0);
@@ -370,7 +384,6 @@ pub fn generate_shared_wrapper(func: &str, use_f16: bool, use_f128: bool) -> Str
 
 {include_macro}
 {pre_guard}
-#include "shared/libc_common.h"
 #include "src/__support/math/{func}.h"
 
 namespace LIBC_NAMESPACE_DECL {{
