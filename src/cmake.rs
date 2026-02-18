@@ -136,12 +136,14 @@ fn update_support_cmake(
     }
 
     if found_pos {
-        content.insert_str(insert_pos, &new_block);
-        if !content[insert_pos..].starts_with('\n') {
-            content.insert(insert_pos + new_block.len(), '\n');
+        let mut to_insert = new_block.clone();
+
+        if insert_pos > 0 && !content[..insert_pos].ends_with('\n') {
+            to_insert.insert(0, '\n');
         }
+        content.insert_str(insert_pos, &to_insert);
     } else {
-        if !content.ends_with('\n') {
+        if !content.is_empty() && !content.ends_with('\n') {
             content.push('\n');
         }
         content.push_str(&new_block);
