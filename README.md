@@ -166,7 +166,6 @@ Change these to match your setup before using the script.
 
 ## Caveats
 
-- The tool works well for straightforward math functions. If a function has unusual structure (multiple `LLVM_LIBC_FUNCTION` macros, complex preprocessor conditionals, etc.), you might need to manually fix up the output.
 - Always review the generated code before committing. The tool does its best, but C++ is C++.
 - The Bazel dependency resolution is heuristic-based - it searches for header paths in the BUILD file to find target names. If a target doesn't exist yet, it falls back to a naming convention.
 - Run `clang-format` after the tool (the script does this automatically). The tool doesn't try to perfectly format the output.
